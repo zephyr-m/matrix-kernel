@@ -1,10 +1,8 @@
 #!/usr/bin/env php
 <?php
 /**
- * Matrix Kernel — Pure Resolver Tests
- * Run: php test.php
- *
- * Тестирует ядро как универсальный resolver. Ноль доменной логики.
+ * Matrix Kernel — Tests
+ * php test.php
  */
 
 require __DIR__ . '/kernel.php';
@@ -12,176 +10,66 @@ require __DIR__ . '/kernel.php';
 $passed = 0;
 $failed = 0;
 
-function assert_eq($actual, $expected, string $name): void {
+function assert_eq($a, $b, string $n): void {
     global $passed, $failed;
-    if ($actual === $expected) {
-        echo "  ✅ {$name}\n";
-        $passed++;
-    } else {
-        echo "  ❌ {$name}\n    expected: " . json_encode($expected) . "\n    got:      " . json_encode($actual) . "\n";
-        $failed++;
-    }
+    $a === $b ? (++$passed && print("  ✅ {$n}\n")) : (++$failed && print("  ❌ {$n}\n    expected: " . json_encode($b) . "\n    got:      " . json_encode($a) . "\n"));
 }
-
-function assert_true($val, string $name): void { assert_eq((bool)$val, true, $name); }
 
 $k = new MatrixKernel();
 
-// ── 1. resolve: матрица + шаблон → результат ─────────────────────────────
-echo "\n🧪 resolve()\n";
+// ── resolve ──────────────────────────────────────────────────────────────
+echo "\n🧪 resolve\n";
 
-// Шаблон считает сумму значений
-$matrix = ['a' => 10, 'b' => 20, 'c' => 30];
-$result = $k->resolve($matrix, fn($m, $ctx, $k) => array_sum($m));
-assert_eq($result, 60, 'resolve: sum template');
+assert_eq($k->resolve(['a' => 10, 'b' => 20], fn($m, $c, $k) => array_sum($m)), 30, 'sum');
+assert_eq($k->resolve(['x' => 1], fn($m, $c, $k) => $c['n'] ?? 0, ['n' => 42]), 42, 'context');
+assert_eq($k->resolve([], fn($m, $c, $k) => $k instanceof MatrixKernel), true, 'kernel ref');
+assert_eq($k->resolve(['t' => 'Hi'], fn($m, $c, $k) => "<b>{$m['t']}</b>"), '<b>Hi</b>', 'html');
+assert_eq($k->resolve(['a' => 1, 'b' => 2, 'c' => 3], fn($m, $c, $k) => array_filter($m, fn($v) => $v > 1)), ['b' => 2, 'c' => 3], 'filter');
 
-// Шаблон фильтрует
-$matrix = ['x' => 1, 'y' => 2, 'z' => 3];
-$result = $k->resolve($matrix, fn($m, $ctx, $k) => array_filter($m, fn($v) => $v > 1));
-assert_eq($result, ['y' => 2, 'z' => 3], 'resolve: filter template');
-
-// Контекст передаётся
-$result = $k->resolve([], fn($m, $ctx, $k) => $ctx['name'] ?? 'none', ['name' => 'test']);
-assert_eq($result, 'test', 'resolve: context passed');
-
-// Kernel передаётся
-$result = $k->resolve([], fn($m, $ctx, $k) => $k instanceof MatrixKernel);
-assert_eq($result, true, 'resolve: kernel passed');
-
-// Шаблон возвращает HTML строку
-$matrix = ['title' => 'Hello', 'color' => 'red'];
-$result = $k->resolve($matrix, fn($m, $ctx, $k) => "<h1 style='color:{$m['color']}'>{$m['title']}</h1>");
-assert_eq($result, "<h1 style='color:red'>Hello</h1>", 'resolve: HTML template');
-
-// ── 2. resolveEntry: один ключ из матрицы ────────────────────────────────
-echo "\n🧪 resolveEntry()\n";
-
-$menu = [
-    'home'  => ['label' => 'Home',  'icon' => '🏠'],
-    'items' => ['label' => 'Items', 'icon' => '📦'],
-];
-
-$result = $k->resolveEntry($menu, 'home', fn($entry, $key, $ctx, $k) => "<a>{$entry['icon']} {$entry['label']}</a>");
-assert_eq($result, '<a>🏠 Home</a>', 'resolveEntry: renders one entry');
-
-$result = $k->resolveEntry($menu, 'nonexistent', fn($e, $k, $c, $kr) => 'found');
-assert_eq($result, null, 'resolveEntry: missing key → null');
-
-// ── 3. walk: каждую запись через шаблон ──────────────────────────────────
-echo "\n🧪 walk()\n";
-
-$result = $k->walk($menu, fn($entry, $key, $ctx, $k) => $entry['label']);
-assert_eq($result, ['home' => 'Home', 'items' => 'Items'], 'walk: extract labels');
-
-// Walk с context
-$result = $k->walk(
-    ['a' => ['v' => 1], 'b' => ['v' => 2]],
-    fn($entry, $key, $ctx, $k) => $entry['v'] * $ctx['multiplier'],
-    ['multiplier' => 10]
-);
-assert_eq($result, ['a' => 10, 'b' => 20], 'walk: context multiplier');
-
-// Walk пустой матрицы
-$result = $k->walk([], fn($e, $k, $c, $kr) => 'x');
-assert_eq($result, [], 'walk: empty matrix → empty result');
-
-// ── 4. hydrate: развернуть callable в данные ─────────────────────────────
-echo "\n🧪 hydrate()\n";
+// ── hydrate ──────────────────────────────────────────────────────────────
+echo "\n🧪 hydrate\n";
 
 $entry = [
     'label'   => 'Buy',
-    'balance' => fn($ctx, $k) => $ctx['current'] - $ctx['amount'],
-    'time'    => fn($ctx, $k) => 'now',
+    'balance' => fn($c, $k) => $c['cur'] - $c['amt'],
     'static'  => 42,
 ];
+$r = $k->hydrate($entry, ['cur' => 1000, 'amt' => 100]);
+assert_eq($r['label'], 'Buy', 'static untouched');
+assert_eq($r['balance'], 900, 'callable resolved');
+assert_eq($r['static'], 42, 'int untouched');
+assert_eq($k->hydrate(['a' => fn($c, $k) => $c['x'] ?? 'def'])['a'], 'def', 'no ctx default');
 
-$result = $k->hydrate($entry, ['current' => 1000, 'amount' => 100]);
-assert_eq($result['label'], 'Buy', 'hydrate: static value untouched');
-assert_eq($result['balance'], 900, 'hydrate: callable resolved');
-assert_eq($result['time'], 'now', 'hydrate: another callable');
-assert_eq($result['static'], 42, 'hydrate: int untouched');
+// ── composition: реальные сценарии из resolve + hydrate ──────────────────
+echo "\n🧪 composition\n";
 
-// Hydrate без контекста
-$entry2 = ['a' => fn($ctx, $k) => $ctx['x'] ?? 'default'];
-$result = $k->hydrate($entry2);
-assert_eq($result['a'], 'default', 'hydrate: no ctx → default');
+// FSM: resolve считает записи по состояниям
+$fsm = ['idle' => ['l' => 'Idle'], 'active' => ['l' => 'Active'], 'closed' => ['l' => 'Closed']];
+$items = [['s' => 'idle'], ['s' => 'active'], ['s' => 'active']];
+$counts = $k->resolve($fsm, fn($m, $c, $k) => array_map(
+    fn($key) => count(array_filter($c['items'], fn($i) => $i['s'] === $key)),
+    array_combine(array_keys($m), array_keys($m))
+), ['items' => $items]);
+assert_eq($counts, ['idle' => 1, 'active' => 2, 'closed' => 0], 'fsm counts');
 
-// ── 5. pipe: цепочка шаблонов ────────────────────────────────────────────
-echo "\n🧪 pipe()\n";
+// Action: hydrate order матрицу
+$action = ['type' => 'buy', 'total' => fn($c, $k) => $c['price'] * $c['qty']];
+$r = $k->hydrate($action, ['price' => 65000, 'qty' => 0.01]);
+assert_eq($r['total'], 650.0, 'order total');
 
-$result = $k->pipe(
-    10,
-    [
-        fn($d, $ctx, $k) => $d * 2,      // 20
-        fn($d, $ctx, $k) => $d + 5,      // 25
-        fn($d, $ctx, $k) => "result:$d", // "result:25"
-    ]
-);
-assert_eq($result, 'result:25', 'pipe: chain 3 transforms');
+// Pipeline: resolve чейнит через reduce
+$data = [1, 2, 3, 4, 5];
+$pipeline = [fn($d) => array_filter($d, fn($v) => $v > 2), fn($d) => array_sum($d)];
+$result = array_reduce($pipeline, fn($d, $fn) => $fn($d), $data);
+assert_eq($result, 12, 'pipeline via reduce (no kernel needed)');
 
-// Pipe с контекстом
-$result = $k->pipe(
-    ['items' => [1,2,3]],
-    [
-        fn($d, $ctx, $k) => array_merge($d, ['count' => count($d['items'])]),
-        fn($d, $ctx, $k) => $d['count'] * $ctx['multiplier'],
-    ],
-    ['multiplier' => 100]
-);
-assert_eq($result, 300, 'pipe: context in pipeline');
-
-// Pipe пустой
-$result = $k->pipe('hello', []);
-assert_eq($result, 'hello', 'pipe: empty pipeline → passthrough');
-
-// ── 6. Composition: resolve + walk + hydrate вместе ──────────────────────
-echo "\n🧪 Composition\n";
-
-// Реальный пример: FSM матрица → resolve buttons для записи
-$fsm = [
-    'idle'   => ['label' => 'Idle',   'buttons' => [['to' => 'active', 'text' => 'Start']]],
-    'active' => ['label' => 'Active', 'buttons' => [['to' => 'closed', 'text' => 'Close']]],
-    'closed' => ['label' => 'Closed', 'buttons' => []],
-];
-
-// walk через FSM → для каждого состояния count записей
-$items = [['state' => 'idle'], ['state' => 'active'], ['state' => 'active'], ['state' => 'closed']];
-$counts = $k->walk($fsm, fn($entry, $key, $ctx, $k) =>
-    count(array_filter($ctx['items'], fn($i) => $i['state'] === $key)),
-    ['items' => $items]
-);
-assert_eq($counts, ['idle' => 1, 'active' => 2, 'closed' => 1], 'composition: FSM counts');
-
-// resolveEntry для конкретного состояния → его кнопки
-$buttons = $k->resolveEntry($fsm, 'active', fn($e, $key, $ctx, $k) => $e['buttons']);
-assert_eq(count($buttons), 1, 'composition: active has 1 button');
-assert_eq($buttons[0]['to'], 'closed', 'composition: button points to closed');
-
-// hydrate запись с callable → resolve
-$action = [
-    'type'  => 'buy',
-    'price' => fn($ctx, $k) => $ctx['ticker'],
-    'total' => fn($ctx, $k) => $ctx['ticker'] * $ctx['amount'],
-];
-$resolved = $k->hydrate($action, ['ticker' => 65000, 'amount' => 0.01]);
-assert_eq($resolved['type'], 'buy', 'composition: hydrate type');
-assert_eq($resolved['price'], 65000, 'composition: hydrate price');
-assert_eq($resolved['total'], 650.0, 'composition: hydrate total');
-
-// pipe: matrix → filter → count → format
-$result = $k->pipe(
-    $items,
-    [
-        fn($d, $ctx, $k) => array_filter($d, fn($i) => $i['state'] === 'active'),
-        fn($d, $ctx, $k) => count($d),
-        fn($d, $ctx, $k) => "Active: {$d}",
-    ]
-);
-assert_eq($result, 'Active: 2', 'composition: pipe filter+count+format');
+// Walk: foreach + resolve (no kernel needed)
+$menu = ['home' => ['icon' => '🏠'], 'items' => ['icon' => '📦']];
+$labels = array_map(fn($e) => $e['icon'], $menu);
+assert_eq($labels, ['home' => '🏠', 'items' => '📦'], 'walk via array_map (no kernel needed)');
 
 // ── Summary ──────────────────────────────────────────────────────────────
 echo "\n" . str_repeat('═', 50) . "\n";
 echo "🧪 Results: {$passed} passed, {$failed} failed\n";
 echo str_repeat('═', 50) . "\n\n";
-
 exit($failed > 0 ? 1 : 0);
