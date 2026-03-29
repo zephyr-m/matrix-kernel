@@ -40,7 +40,7 @@ class Kernel
     {
         $out = [];
         foreach ($entry as $k => $v) {
-            $out[$k] = is_callable($v) ? $v($ctx, $this) : $v;
+            $out[$k] = ($v instanceof \Closure) ? $v($ctx, $this) : $v;
         }
         return $out;
     }
