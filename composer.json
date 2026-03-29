@@ -1,0 +1,33 @@
+{
+    "name": "zephyr/matrix-kernel",
+    "description": "Universal matrix resolver. 2 methods. Zero domain knowledge.",
+    "type": "library",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "zephyr",
+            "email": "zephyr.muldash@gmail.com"
+        }
+    ],
+    "require": {
+        "php": ">=8.1"
+    },
+    "autoload": {
+        "psr-4": {
+            "Zephyr\\MatrixKernel\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Zephyr\\MatrixKernel\\Tests\\": "tests/"
+        }
+    },
+    "minimum-stability": "stable",
+    "keywords": [
+        "matrix",
+        "kernel",
+        "resolver",
+        "engine",
+        "cyan-framework"
+    ]
+}

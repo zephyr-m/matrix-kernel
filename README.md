@@ -2,76 +2,42 @@
 
 > Матрица + шаблон → результат. Больше ничего.
 
-## Что это
+## Установка
 
-38 строк. 2 метода. Универсальный resolver.
+```bash
+composer require zephyr/matrix-kernel
+```
+
+## Использование
 
 ```php
-$k = new MatrixKernel();
+use Zephyr\MatrixKernel\Kernel;
+
+$k = new Kernel();
 
 // resolve: применить шаблон к матрице
-$k->resolve($matrix, fn($m, $ctx, $k) => /* что угодно */, $ctx);
+$result = $k->resolve($matrix, fn($m, $ctx, $k) => /* что угодно */, $ctx);
 
-// hydrate: развернуть callable внутри записи в данные
-$k->hydrate($entry, $ctx);
+// hydrate: развернуть callable в данные
+$data = $k->hydrate(['price' => fn($c, $k) => $c['ticker'] * $c['qty']], $ctx);
 ```
 
-Ядро не знает ни про таблицы, ни про канбан, ни про API, ни про FSM, ни про БД.
+## Зачем
+
+38 строк. 2 метода. Ноль зависимостей.
+
+Ядро не знает ни про таблицы, ни про канбан, ни про API, ни про FSM.
 Оно знает: **данные + функция → результат**.
 
-## Почему 2 метода
+Движки (CRUD, FSM, Form, Layout) строятся **поверх** ядра.
 
-| Метод | Что делает | Аналог |
-|-------|-----------|--------|
-| `resolve` | Внешняя логика к данным | `template(matrix)` |
-| `hydrate` | Внутренние callable → данные | `entry.map(is_fn ? call : keep)` |
+## API
 
-Всё остальное — стандартный PHP:
-- Walk = `array_map`
-- Pipe = `array_reduce`
-- Lookup = `$matrix[$key]`
+| Метод | Сигнатура | Что делает |
+|-------|-----------|------------|
+| `resolve` | `(array $matrix, callable $template, array $ctx = []): mixed` | Внешняя логика к данным |
+| `hydrate` | `(array $entry, array $ctx = []): array` | Callable → данные |
 
-## Как строить движки поверх
+## Лицензия
 
-```php
-$k = new MatrixKernel();
-
-// CRUD движок = resolve + SQL шаблон
-$html = $k->resolve($entity, fn($m, $ctx, $k) => /* рендер таблицы */);
-
-// FSM движок = resolve для подсчёта + hydrate для переходов
-$counts = $k->resolve($fsm, fn($m, $ctx, $k) => /* count по state */);
-
-// Order движок = hydrate для вычислений
-$order = $k->hydrate($action, ['price' => 65000, 'qty' => 0.01]);
-// → ['type' => 'buy', 'total' => 650.0]
-
-// API движок = resolve для dispatch
-$result = $k->resolve($commands, fn($m, $ctx, $k) => $m[$ctx['cmd']]['handler']($ctx));
-```
-
-## Архитектура
-
-```
-MatrixKernel (38 строк)
-├── resolve(matrix, template, ctx)
-└── hydrate(entry, ctx)
-
-Движки строятся поверх:
-├── engines/crud.php      ← entity + resolve
-├── engines/fsm.php       ← states + resolve + hydrate
-├── engines/api.php       ← commands + resolve
-├── engines/form.php      ← fields + resolve
-├── engines/layout.php    ← menu + resolve
-└── engines/migration.php ← entity + resolve → SQL
-```
-
-## Принцип
-
-```
-Ядро = resolve + hydrate
-Движок = ядро + матрица + шаблон
-Приложение = набор движков
-```
-
-Ядро никогда не меняется. Движки переиспользуются. Приложение = только матрицы.
+MIT
