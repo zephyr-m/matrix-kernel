@@ -1,107 +1,77 @@
 # Matrix Kernel
 
-> Один раз написал ядро — потом собираешь что угодно, дёргая матрицы.
+> Матрица + шаблон → результат. Больше ничего.
 
 ## Что это
 
-Универсальный движок, который читает **декларативные матрицы** (JSON/PHP/JS) и генерирует из них:
-- **API** (RPC endpoint)
-- **UI** (таблицы, канбан, формы, дашборды)
-- **Поведение** (FSM, CRUD, transitions)
+38 строк. 2 метода. Универсальный resolver.
 
-Новый проект = набор матриц. **Ноль кода.**
+```php
+$k = new MatrixKernel();
 
-## Почему
+// resolve: применить шаблон к матрице
+$k->resolve($matrix, fn($m, $ctx, $k) => /* что угодно */, $ctx);
 
-Мы построили Spider и MoneyBot и увидели одинаковый скелет:
-
-```
-matrices/  →  engine/  →  api.php  →  pages/
+// hydrate: развернуть callable внутри записи в данные
+$k->hydrate($entry, $ctx);
 ```
 
-Entity матрица → таблица. FSM матрица → канбан. Command матрица → API.
-Каждый раз одна и та же работа. Matrix Kernel делает её один раз.
+Ядро не знает ни про таблицы, ни про канбан, ни про API, ни про FSM, ни про БД.
+Оно знает: **данные + функция → результат**.
 
-## Доказательство
+## Почему 2 метода
 
-| Проект   | Матрицы                        | Что получилось              |
-|----------|--------------------------------|-----------------------------|
-| Spider   | jobs, states, sources, menu    | CRM для вакансий            |
-| MoneyBot | pairs, signals, strategies     | Торговый бот с канбаном     |
+| Метод | Что делает | Аналог |
+|-------|-----------|--------|
+| `resolve` | Внешняя логика к данным | `template(matrix)` |
+| `hydrate` | Внутренние callable → данные | `entry.map(is_fn ? call : keep)` |
 
-Обоим проектам нужно одно и то же: CRUD + FSM + RPC + Layout.
+Всё остальное — стандартный PHP:
+- Walk = `array_map`
+- Pipe = `array_reduce`
+- Lookup = `$matrix[$key]`
 
-## Типы матриц
+## Как строить движки поверх
 
-```
-entity   — что существует (pairs, jobs, users)
-fsm      — как оно живёт (idle → active → closed)
-command  — что можно делать (get_X, set_X, delete_X)
-layout   — как выглядит (menu, widgets, pages)
-form     — как вводить (fields, validation, defaults)
+```php
+$k = new MatrixKernel();
+
+// CRUD движок = resolve + SQL шаблон
+$html = $k->resolve($entity, fn($m, $ctx, $k) => /* рендер таблицы */);
+
+// FSM движок = resolve для подсчёта + hydrate для переходов
+$counts = $k->resolve($fsm, fn($m, $ctx, $k) => /* count по state */);
+
+// Order движок = hydrate для вычислений
+$order = $k->hydrate($action, ['price' => 65000, 'qty' => 0.01]);
+// → ['type' => 'buy', 'total' => 650.0]
+
+// API движок = resolve для dispatch
+$result = $k->resolve($commands, fn($m, $ctx, $k) => $m[$ctx['cmd']]['handler']($ctx));
 ```
 
 ## Архитектура
 
 ```
-matrix-kernel/
-├── kernel.php          ← точка входа: load matrices → dispatch
-├── engines/
-│   ├── entity.php      ← CRUD: table, card, detail
-│   ├── fsm.php         ← Kanban, transitions, buttons
-│   ├── command.php     ← RPC: validate → bind → execute
-│   ├── layout.php      ← Menu, sidebar, pages, routing
-│   └── form.php        ← Input generation, validation
-├── renderers/
-│   ├── table.php       ← <table> из entity матрицы
-│   ├── kanban.php      ← Kanban из FSM матрицы
-│   ├── cards.php       ← Card grid из entity
-│   └── dashboard.php   ← Stat cards + widgets
-├── api.php             ← Универсальный RPC endpoint
-└── app.php             ← Универсальный UI endpoint
-```
+MatrixKernel (38 строк)
+├── resolve(matrix, template, ctx)
+└── hydrate(entry, ctx)
 
-## Как используется
-
-```php
-// moneybot/index.php — весь проект:
-require 'matrix-kernel/kernel.php';
-
-$app = new MatrixKernel([
-    'name'     => 'moneyBot',
-    'db'       => 'moneybot.db',
-    'entities' => require 'matrices/pairs.php',
-    'fsm'      => require 'matrices/signals.php',
-    'commands' => require 'matrices/api_commands.php',
-    'layout'   => require 'matrices/layout.php',
-    'menu'     => require 'matrices/menu.php',
-]);
-
-$app->run();  // → API + UI + всё поведение
-```
-
-```php
-// spider/index.php — другой проект, тот же kernel:
-$app = new MatrixKernel([
-    'name'     => 'Spider',
-    'db'       => 'spider.db',
-    'entities' => require 'matrices/entities.php',
-    'fsm'      => require 'matrices/states.php',
-    'commands' => require 'matrices/api_commands.php',
-    'layout'   => require 'matrices/layout.php',
-    'menu'     => require 'matrices/menu.php',
-]);
-
-$app->run();
+Движки строятся поверх:
+├── engines/crud.php      ← entity + resolve
+├── engines/fsm.php       ← states + resolve + hydrate
+├── engines/api.php       ← commands + resolve
+├── engines/form.php      ← fields + resolve
+├── engines/layout.php    ← menu + resolve
+└── engines/migration.php ← entity + resolve → SQL
 ```
 
 ## Принцип
 
 ```
-Поведение = данные
-Логика = интерпретатор
-Расширение = строка в матрице
+Ядро = resolve + hydrate
+Движок = ядро + матрица + шаблон
+Приложение = набор движков
 ```
 
-Engine **никогда** не знает что такое "позиция", "вакансия" или "пара".
-Он знает: entity, state, command, field.
+Ядро никогда не меняется. Движки переиспользуются. Приложение = только матрицы.
