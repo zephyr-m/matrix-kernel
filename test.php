@@ -1,10 +1,10 @@
 #!/usr/bin/env php
 <?php
 /**
- * Matrix Kernel — Auto Tests v2
+ * Matrix Kernel — Pure Resolver Tests
  * Run: php test.php
  *
- * Tests: Storage adapter, Command engine, FSM engine, Action engine, Kanban grouping.
+ * Тестирует ядро как универсальный resolver. Ноль доменной логики.
  */
 
 require __DIR__ . '/kernel.php';
@@ -18,248 +18,168 @@ function assert_eq($actual, $expected, string $name): void {
         echo "  ✅ {$name}\n";
         $passed++;
     } else {
-        echo "  ❌ {$name} (expected: " . json_encode($expected) . ", got: " . json_encode($actual) . ")\n";
+        echo "  ❌ {$name}\n    expected: " . json_encode($expected) . "\n    got:      " . json_encode($actual) . "\n";
         $failed++;
     }
 }
 
-function assert_true($condition, string $name): void {
-    assert_eq((bool)$condition, true, $name);
-}
+function assert_true($val, string $name): void { assert_eq((bool)$val, true, $name); }
 
-// ── Test Matrices ────────────────────────────────────────────────────────
+$k = new MatrixKernel();
 
-$TEST_COMMANDS = [
-    'ping' => [
-        'label' => 'Ping', 'icon' => 'heartbeat',
-        'type'  => 'raw',
-        'handler' => fn($storage, $p, $kernel) => ['pong' => true, 'name' => $kernel->name],
-    ],
-    'get_items' => [
-        'label' => 'Get Items', 'icon' => 'list',
-        'type'  => 'query',
-        'sql'   => "SELECT * FROM items WHERE state = :state ORDER BY id DESC LIMIT :limit",
-        'params' => ['state' => 'active', 'limit' => 50],
-    ],
-    'set_state' => [
-        'label' => 'Set State', 'icon' => 'edit',
-        'type'  => 'exec',
-        'sql'   => "UPDATE items SET state = :state WHERE id = :id",
-        'params' => ['id', 'state'],
-    ],
-    'add_item' => [
-        'label' => 'Add Item', 'icon' => 'plus',
-        'type'  => 'exec',
-        'sql'   => "INSERT INTO items (title, state) VALUES (:title, 'active')",
-        'params' => ['title'],
-    ],
+// ── 1. resolve: матрица + шаблон → результат ─────────────────────────────
+echo "\n🧪 resolve()\n";
+
+// Шаблон считает сумму значений
+$matrix = ['a' => 10, 'b' => 20, 'c' => 30];
+$result = $k->resolve($matrix, fn($m, $ctx, $k) => array_sum($m));
+assert_eq($result, 60, 'resolve: sum template');
+
+// Шаблон фильтрует
+$matrix = ['x' => 1, 'y' => 2, 'z' => 3];
+$result = $k->resolve($matrix, fn($m, $ctx, $k) => array_filter($m, fn($v) => $v > 1));
+assert_eq($result, ['y' => 2, 'z' => 3], 'resolve: filter template');
+
+// Контекст передаётся
+$result = $k->resolve([], fn($m, $ctx, $k) => $ctx['name'] ?? 'none', ['name' => 'test']);
+assert_eq($result, 'test', 'resolve: context passed');
+
+// Kernel передаётся
+$result = $k->resolve([], fn($m, $ctx, $k) => $k instanceof MatrixKernel);
+assert_eq($result, true, 'resolve: kernel passed');
+
+// Шаблон возвращает HTML строку
+$matrix = ['title' => 'Hello', 'color' => 'red'];
+$result = $k->resolve($matrix, fn($m, $ctx, $k) => "<h1 style='color:{$m['color']}'>{$m['title']}</h1>");
+assert_eq($result, "<h1 style='color:red'>Hello</h1>", 'resolve: HTML template');
+
+// ── 2. resolveEntry: один ключ из матрицы ────────────────────────────────
+echo "\n🧪 resolveEntry()\n";
+
+$menu = [
+    'home'  => ['label' => 'Home',  'icon' => '🏠'],
+    'items' => ['label' => 'Items', 'icon' => '📦'],
 ];
 
-$TEST_FSM = [
-    'idle'    => ['label' => 'Idle',   'color' => 'secondary', 'icon' => 'ti-clock',  'buttons' => [
-        ['state' => 'active', 'label' => 'Start',  'class' => 'btn-outline-green', 'icon' => 'ti-play'],
-    ]],
-    'active'  => ['label' => 'Active', 'color' => 'green', 'icon' => 'ti-bolt', 'buttons' => [
-        ['state' => 'closed', 'label' => 'Close', 'class' => 'btn-outline-red', 'icon' => 'ti-x'],
-        ['state' => 'idle',   'label' => 'Pause', 'class' => 'btn-outline-yellow','icon' => 'ti-pause'],
-    ]],
-    'closed'  => ['label' => 'Closed', 'color' => 'red', 'icon' => 'ti-check', 'buttons' => [],
-        'onEnter' => fn($storage, $id, $state, $kernel) => ['ok' => true, 'closed' => true],
-    ],
+$result = $k->resolveEntry($menu, 'home', fn($entry, $key, $ctx, $k) => "<a>{$entry['icon']} {$entry['label']}</a>");
+assert_eq($result, '<a>🏠 Home</a>', 'resolveEntry: renders one entry');
+
+$result = $k->resolveEntry($menu, 'nonexistent', fn($e, $k, $c, $kr) => 'found');
+assert_eq($result, null, 'resolveEntry: missing key → null');
+
+// ── 3. walk: каждую запись через шаблон ──────────────────────────────────
+echo "\n🧪 walk()\n";
+
+$result = $k->walk($menu, fn($entry, $key, $ctx, $k) => $entry['label']);
+assert_eq($result, ['home' => 'Home', 'items' => 'Items'], 'walk: extract labels');
+
+// Walk с context
+$result = $k->walk(
+    ['a' => ['v' => 1], 'b' => ['v' => 2]],
+    fn($entry, $key, $ctx, $k) => $entry['v'] * $ctx['multiplier'],
+    ['multiplier' => 10]
+);
+assert_eq($result, ['a' => 10, 'b' => 20], 'walk: context multiplier');
+
+// Walk пустой матрицы
+$result = $k->walk([], fn($e, $k, $c, $kr) => 'x');
+assert_eq($result, [], 'walk: empty matrix → empty result');
+
+// ── 4. hydrate: развернуть callable в данные ─────────────────────────────
+echo "\n🧪 hydrate()\n";
+
+$entry = [
+    'label'   => 'Buy',
+    'balance' => fn($ctx, $k) => $ctx['current'] - $ctx['amount'],
+    'time'    => fn($ctx, $k) => 'now',
+    'static'  => 42,
 ];
 
-$TEST_ACTIONS = [
-    'buy' => [
-        'label'   => 'Buy',
-        'balance' => fn($storage, $ctx, $kernel) => ($ctx['current'] ?? 0) - ($ctx['total'] ?? 0),
-        'record'  => fn($storage, $ctx, $kernel) => $storage->exec(
-            "INSERT INTO items (title, state) VALUES (:title, 'active')",
-            ['title' => 'bought:' . ($ctx['pair'] ?? '')]
-        ),
+$result = $k->hydrate($entry, ['current' => 1000, 'amount' => 100]);
+assert_eq($result['label'], 'Buy', 'hydrate: static value untouched');
+assert_eq($result['balance'], 900, 'hydrate: callable resolved');
+assert_eq($result['time'], 'now', 'hydrate: another callable');
+assert_eq($result['static'], 42, 'hydrate: int untouched');
+
+// Hydrate без контекста
+$entry2 = ['a' => fn($ctx, $k) => $ctx['x'] ?? 'default'];
+$result = $k->hydrate($entry2);
+assert_eq($result['a'], 'default', 'hydrate: no ctx → default');
+
+// ── 5. pipe: цепочка шаблонов ────────────────────────────────────────────
+echo "\n🧪 pipe()\n";
+
+$result = $k->pipe(
+    10,
+    [
+        fn($d, $ctx, $k) => $d * 2,      // 20
+        fn($d, $ctx, $k) => $d + 5,      // 25
+        fn($d, $ctx, $k) => "result:$d", // "result:25"
+    ]
+);
+assert_eq($result, 'result:25', 'pipe: chain 3 transforms');
+
+// Pipe с контекстом
+$result = $k->pipe(
+    ['items' => [1,2,3]],
+    [
+        fn($d, $ctx, $k) => array_merge($d, ['count' => count($d['items'])]),
+        fn($d, $ctx, $k) => $d['count'] * $ctx['multiplier'],
     ],
-    'sell' => [
-        'label'   => 'Sell',
-        'balance' => fn($storage, $ctx, $kernel) => ($ctx['current'] ?? 0) + ($ctx['total'] ?? 0),
-        'record'  => fn($storage, $ctx, $kernel) => $storage->exec(
-            "UPDATE items SET state = 'closed' WHERE title = :title",
-            ['title' => 'bought:' . ($ctx['pair'] ?? '')]
-        ),
-    ],
+    ['multiplier' => 100]
+);
+assert_eq($result, 300, 'pipe: context in pipeline');
+
+// Pipe пустой
+$result = $k->pipe('hello', []);
+assert_eq($result, 'hello', 'pipe: empty pipeline → passthrough');
+
+// ── 6. Composition: resolve + walk + hydrate вместе ──────────────────────
+echo "\n🧪 Composition\n";
+
+// Реальный пример: FSM матрица → resolve buttons для записи
+$fsm = [
+    'idle'   => ['label' => 'Idle',   'buttons' => [['to' => 'active', 'text' => 'Start']]],
+    'active' => ['label' => 'Active', 'buttons' => [['to' => 'closed', 'text' => 'Close']]],
+    'closed' => ['label' => 'Closed', 'buttons' => []],
 ];
 
-$TEST_ENTITY = [
-    'id'    => ['label' => 'ID',      'type' => 'number'],
-    'title' => ['label' => 'Название','type' => 'text'],
-    'state' => ['label' => 'Статус',  'type' => 'badge'],
-    'price' => ['label' => 'Цена',    'type' => 'money'],
+// walk через FSM → для каждого состояния count записей
+$items = [['state' => 'idle'], ['state' => 'active'], ['state' => 'active'], ['state' => 'closed']];
+$counts = $k->walk($fsm, fn($entry, $key, $ctx, $k) =>
+    count(array_filter($ctx['items'], fn($i) => $i['state'] === $key)),
+    ['items' => $items]
+);
+assert_eq($counts, ['idle' => 1, 'active' => 2, 'closed' => 1], 'composition: FSM counts');
+
+// resolveEntry для конкретного состояния → его кнопки
+$buttons = $k->resolveEntry($fsm, 'active', fn($e, $key, $ctx, $k) => $e['buttons']);
+assert_eq(count($buttons), 1, 'composition: active has 1 button');
+assert_eq($buttons[0]['to'], 'closed', 'composition: button points to closed');
+
+// hydrate запись с callable → resolve
+$action = [
+    'type'  => 'buy',
+    'price' => fn($ctx, $k) => $ctx['ticker'],
+    'total' => fn($ctx, $k) => $ctx['ticker'] * $ctx['amount'],
 ];
+$resolved = $k->hydrate($action, ['ticker' => 65000, 'amount' => 0.01]);
+assert_eq($resolved['type'], 'buy', 'composition: hydrate type');
+assert_eq($resolved['price'], 65000, 'composition: hydrate price');
+assert_eq($resolved['total'], 650.0, 'composition: hydrate total');
 
-// ── Create kernel ────────────────────────────────────────────────────────
+// pipe: matrix → filter → count → format
+$result = $k->pipe(
+    $items,
+    [
+        fn($d, $ctx, $k) => array_filter($d, fn($i) => $i['state'] === 'active'),
+        fn($d, $ctx, $k) => count($d),
+        fn($d, $ctx, $k) => "Active: {$d}",
+    ]
+);
+assert_eq($result, 'Active: 2', 'composition: pipe filter+count+format');
 
-echo "\n🧪 Matrix Kernel Tests v2\n";
-
-$testDbPath = sys_get_temp_dir() . '/mk_test_' . getmypid() . '.db';
-@unlink($testDbPath);
-
-$kernel = new MatrixKernel([
-    'name'     => 'test-app',
-    'db'       => $testDbPath,
-    'commands' => $TEST_COMMANDS,
-    'fsm'      => $TEST_FSM,
-    'actions'  => $TEST_ACTIONS,
-    'entities' => $TEST_ENTITY,
-    'menu'     => [],
-    'layout'   => [],
-]);
-
-// Create test table
-$kernel->storage->exec("CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, state TEXT DEFAULT 'idle', price REAL DEFAULT 0)");
-
-// ── 1. Storage Adapter ───────────────────────────────────────────────────
-
-echo "\n  Storage Adapter\n";
-assert_true($kernel->storage instanceof MatrixStorage, 'storage implements MatrixStorage');
-assert_true($kernel->storage instanceof SqliteStorage, 'storage is SqliteStorage');
-
-$kernel->storage->exec("INSERT INTO items (title, state, price) VALUES (:t, :s, :p)", ['t' => 'Alpha', 's' => 'active', 'p' => 100]);
-$kernel->storage->exec("INSERT INTO items (title, state, price) VALUES (:t, :s, :p)", ['t' => 'Beta', 's' => 'idle', 'p' => 200]);
-$kernel->storage->exec("INSERT INTO items (title, state, price) VALUES (:t, :s, :p)", ['t' => 'Gamma', 's' => 'active', 'p' => 50]);
-
-$rows = $kernel->storage->query("SELECT * FROM items WHERE state = :s", ['s' => 'active']);
-assert_eq(count($rows), 2, 'query returns 2 active items');
-
-$count = $kernel->storage->scalar("SELECT COUNT(*) FROM items");
-assert_eq((int)$count, 3, 'scalar returns count');
-
-$changes = $kernel->storage->exec("UPDATE items SET price = 999 WHERE id = :id", ['id' => 1]);
-assert_eq($changes, 1, 'exec returns changes count');
-
-$price = $kernel->storage->scalar("SELECT price FROM items WHERE id = 1");
-assert_eq((int)$price, 999, 'exec actually updated');
-
-// ── 2. Kernel Init ───────────────────────────────────────────────────────
-
-echo "\n  Kernel Init\n";
-assert_eq($kernel->name, 'test-app', 'kernel name');
-assert_eq(count($kernel->matrix('commands')), 4, 'commands: 4');
-assert_eq(count($kernel->matrix('fsm')), 3, 'fsm: 3 states');
-assert_eq(count($kernel->matrix('actions')), 2, 'actions: 2 (buy/sell)');
-assert_eq(count($kernel->matrix('entities')), 4, 'entities: 4 columns');
-assert_eq($kernel->matrix('nonexistent'), [], 'unknown matrix = []');
-
-// No hardcoded matrix keys — custom key works
-$kernel2 = new MatrixKernel([
-    'name' => 'custom',
-    'db' => $testDbPath,
-    'my_custom_matrix' => ['a' => 1, 'b' => 2],
-]);
-assert_eq($kernel2->matrix('my_custom_matrix'), ['a' => 1, 'b' => 2], 'custom matrix key accepted');
-
-// ── 3. Command Engine ────────────────────────────────────────────────────
-
-echo "\n  Command Engine\n";
-
-// Raw command receives kernel
-$handler = $TEST_COMMANDS['ping']['handler'];
-$result = $handler($kernel->storage, [], $kernel);
-assert_eq($result['pong'], true, 'ping: pong');
-assert_eq($result['name'], 'test-app', 'ping: handler receives kernel');
-
-// Query
-$rows = $kernel->storage->query($TEST_COMMANDS['get_items']['sql'], ['state' => 'active', 'limit' => 50]);
-assert_eq(count($rows), 2, 'query: 2 active');
-assert_eq($rows[0]['title'], 'Gamma', 'query: DESC order');
-
-// Exec
-$kernel->storage->exec($TEST_COMMANDS['set_state']['sql'], ['id' => 1, 'state' => 'closed']);
-$state = $kernel->storage->scalar("SELECT state FROM items WHERE id = 1");
-assert_eq($state, 'closed', 'exec: state updated');
-
-// ── 4. FSM Engine ────────────────────────────────────────────────────────
-
-echo "\n  FSM Engine\n";
-
-// Valid transition
-$result = $kernel->fsmTransition('fsm', 'items', 2, 'active');
-assert_eq($result['ok'], true, 'fsm: valid transition ok');
-$state = $kernel->storage->scalar("SELECT state FROM items WHERE id = 2");
-assert_eq($state, 'active', 'fsm: state updated in storage');
-
-// Invalid transition
-$result = $kernel->fsmTransition('fsm', 'items', 2, 'nonexistent');
-assert_eq($result['ok'], false, 'fsm: invalid state rejected');
-$state = $kernel->storage->scalar("SELECT state FROM items WHERE id = 2");
-assert_eq($state, 'active', 'fsm: state unchanged after reject');
-
-// onEnter handler called
-$result = $kernel->fsmTransition('fsm', 'items', 2, 'closed');
-assert_eq($result['ok'], true, 'fsm: closed transition ok');
-$state = $kernel->storage->scalar("SELECT state FROM items WHERE id = 2");
-assert_eq($state, 'closed', 'fsm: onEnter handler + state updated');
-
-// ── 5. Action Engine ────────────────────────────────────────────────────
-
-echo "\n  Action Engine\n";
-
-// Buy action
-$result = $kernel->executeAction('actions', 'buy', ['current' => 1000, 'total' => 100, 'pair' => 'BTC']);
-assert_eq($result['ok'], true, 'action buy: ok');
-assert_eq($result['results']['balance'], 900, 'action buy: balance = 1000 - 100');
-assert_eq($result['results']['label'], 'Buy', 'action buy: non-callable fields returned as-is');
-assert_true($result['results']['record'] >= 0, 'action buy: record handler executed');
-
-// Verify record was created
-$bought = $kernel->storage->scalar("SELECT COUNT(*) FROM items WHERE title = 'bought:BTC'");
-assert_true((int)$bought > 0, 'action buy: record created in storage');
-
-// Sell action  
-$result = $kernel->executeAction('actions', 'sell', ['current' => 900, 'total' => 150, 'pair' => 'BTC']);
-assert_eq($result['ok'], true, 'action sell: ok');
-assert_eq($result['results']['balance'], 1050, 'action sell: balance = 900 + 150');
-
-// Verify record was updated
-$state = $kernel->storage->scalar("SELECT state FROM items WHERE title = 'bought:BTC'");
-assert_eq($state, 'closed', 'action sell: record updated in storage');
-
-// Unknown action
-$result = $kernel->executeAction('actions', 'short', []);
-assert_eq($result['ok'], false, 'action unknown: rejected');
-
-// ── 6. FSM Structure ────────────────────────────────────────────────────
-
-echo "\n  FSM Structure\n";
-
-$fsm = $kernel->matrix('fsm');
-assert_eq(count($fsm['idle']['buttons']), 1, 'idle: 1 button');
-assert_eq($fsm['idle']['buttons'][0]['state'], 'active', 'idle → active');
-assert_eq(count($fsm['active']['buttons']), 2, 'active: 2 buttons');
-assert_eq(count($fsm['closed']['buttons']), 0, 'closed: terminal');
-assert_true(is_callable($fsm['closed']['onEnter']), 'closed: onEnter is callable');
-
-foreach ($fsm as $key => $sig) {
-    assert_true(isset($sig['label'], $sig['color'], $sig['icon']), "state '$key': label/color/icon");
-}
-
-// ── 7. Kanban Grouping ──────────────────────────────────────────────────
-
-echo "\n  Kanban Grouping\n";
-
-$all = $kernel->storage->query("SELECT * FROM items");
-$byState = [];
-foreach ($fsm as $key => $sig) $byState[$key] = [];
-foreach ($all as $r) {
-    $s = $r['state'];
-    if (isset($byState[$s])) $byState[$s][] = $r;
-}
-
-$totalGrouped = array_sum(array_map('count', $byState));
-assert_eq($totalGrouped, count($all), 'kanban: all items grouped');
-assert_true(count($byState['closed']) >= 2, 'kanban: closed has items');
-assert_true(count($byState['active']) >= 1, 'kanban: active has items');
-
-// ── Cleanup ──────────────────────────────────────────────────────────────
-@unlink($testDbPath);
-
+// ── Summary ──────────────────────────────────────────────────────────────
 echo "\n" . str_repeat('═', 50) . "\n";
 echo "🧪 Results: {$passed} passed, {$failed} failed\n";
 echo str_repeat('═', 50) . "\n\n";
