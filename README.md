@@ -5,7 +5,7 @@
 ## Установка
 
 ```bash
-composer require zephyr/matrix-kernel
+composer require zephyr-m/matrix-kernel
 ```
 
 ## Использование

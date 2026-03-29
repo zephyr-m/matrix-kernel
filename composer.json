@@ -1,5 +1,5 @@
 {
-    "name": "zephyr/matrix-kernel",
+    "name": "zephyr-m/matrix-kernel",
     "description": "Universal matrix resolver. 2 methods. Zero domain knowledge.",
     "type": "library",
     "license": "MIT",
